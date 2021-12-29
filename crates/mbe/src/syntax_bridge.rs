@@ -107,11 +107,8 @@ pub fn parse_exprs_with_sep(tt: &tt::Subtree, sep: char) -> Vec<tt::Subtree> {
         let expanded = iter.expect_fragment(parser::PrefixEntryPoint::Expr);
 
         res.push(match expanded.value {
-            None => break,
-            Some(tt @ tt::TokenTree::Leaf(_)) => {
-                tt::Subtree { delimiter: None, token_trees: vec![tt] }
-            }
-            Some(tt::TokenTree::Subtree(tt)) => tt,
+            tt @ tt::TokenTree::Leaf(_) => tt::Subtree { delimiter: None, token_trees: vec![tt] },
+            tt::TokenTree::Subtree(tt) => tt,
         });
 
         let mut fork = iter.clone();

@@ -72,13 +72,6 @@ use crate::{
 };
 
 impl Bindings {
-    fn push_optional(&mut self, name: &SmolStr) {
-        // FIXME: Do we have a better way to represent an empty token ?
-        // Insert an empty subtree for empty token
-        let tt = tt::Subtree::default().into();
-        self.inner.insert(name.clone(), Binding::Fragment(Fragment::Tokens(tt)));
-    }
-
     fn push_empty(&mut self, name: &SmolStr) {
         self.inner.insert(name.clone(), Binding::Empty);
     }
@@ -137,7 +130,6 @@ pub(super) fn match_(pattern: &MetaTemplate, input: &tt::Subtree) -> Match {
 #[derive(Debug, Clone)]
 enum BindingKind {
     Empty(SmolStr),
-    Optional(SmolStr),
     Fragment(SmolStr, Fragment),
     Nested(usize, usize),
 }
@@ -190,10 +182,6 @@ impl BindingsBuilder {
         self.nodes[idx.0].push(LinkNode::Node(Rc::new(BindingKind::Empty(var.clone()))));
     }
 
-    fn push_optional(&mut self, idx: &mut BindingsIdx, var: &SmolStr) {
-        self.nodes[idx.0].push(LinkNode::Node(Rc::new(BindingKind::Optional(var.clone()))));
-    }
-
     fn push_fragment(&mut self, idx: &mut BindingsIdx, var: &SmolStr, fragment: Fragment) {
         self.nodes[idx.0]
             .push(LinkNode::Node(Rc::new(BindingKind::Fragment(var.clone(), fragment))));
@@ -225,9 +213,6 @@ impl BindingsBuilder {
             match &**cmd {
                 BindingKind::Empty(name) => {
                     bindings.push_empty(name);
-                }
-                BindingKind::Optional(name) => {
-                    bindings.push_optional(name);
                 }
                 BindingKind::Fragment(name, fragment) => {
                     bindings.inner.insert(name.clone(), Binding::Fragment(fragment.clone()));
@@ -337,7 +322,7 @@ struct MatchState<'t> {
     bindings: BindingsIdx,
 
     /// Cached result of meta variable parsing
-    meta_result: Option<(TtIter<'t>, ExpandResult<Option<Fragment>>)>,
+    meta_result: Option<(TtIter<'t>, ExpandResult<Fragment>)>,
 
     /// Is error occuried in this state, will `poised` to "parent"
     is_error: bool,
@@ -480,21 +465,16 @@ fn match_loop_inner<'t>(
                     let match_res = match_meta_var(kind.as_str(), &mut fork);
                     match match_res.err {
                         None => {
-                            // Some meta variables are optional (e.g. vis)
-                            if match_res.value.is_some() {
-                                item.meta_result = Some((fork, match_res));
-                                try_push!(bb_items, item);
-                            } else {
-                                bindings_builder.push_optional(&mut item.bindings, name);
-                                item.dot.next();
-                                cur_items.push(item);
-                            }
+                            item.meta_result = Some((fork, match_res));
+                            try_push!(bb_items, item);
                         }
                         Some(err) => {
                             res.add_err(err);
-                            if let Some(fragment) = match_res.value {
-                                bindings_builder.push_fragment(&mut item.bindings, name, fragment);
-                            }
+                            bindings_builder.push_fragment(
+                                &mut item.bindings,
+                                name,
+                                match_res.value,
+                            );
                             item.is_error = true;
                             error_items.push(item);
                         }
@@ -636,15 +616,7 @@ fn match_loop(pattern: &MetaTemplate, src: &tt::Subtree) -> Match {
 
             if let Some(OpDelimited::Op(Op::Var { name, .. })) = item.dot.peek() {
                 let (iter, match_res) = item.meta_result.take().unwrap();
-                match match_res.value {
-                    Some(fragment) => {
-                        bindings_builder.push_fragment(&mut item.bindings, name, fragment);
-                    }
-                    None if match_res.err.is_none() => {
-                        bindings_builder.push_optional(&mut item.bindings, name);
-                    }
-                    None => {}
-                }
+                bindings_builder.push_fragment(&mut item.bindings, name, match_res.value);
                 if let Some(err) = match_res.err {
                     res.add_err(err);
                 }
@@ -687,7 +659,7 @@ fn match_leaf(lhs: &tt::Leaf, src: &mut TtIter) -> Result<(), ExpandError> {
     Ok(())
 }
 
-fn match_meta_var(kind: &str, input: &mut TtIter) -> ExpandResult<Option<Fragment>> {
+fn match_meta_var(kind: &str, input: &mut TtIter) -> ExpandResult<Fragment> {
     let fragment = match kind {
         "path" => parser::PrefixEntryPoint::Path,
         "ty" => parser::PrefixEntryPoint::Ty,
@@ -699,21 +671,16 @@ fn match_meta_var(kind: &str, input: &mut TtIter) -> ExpandResult<Option<Fragmen
         "block" => parser::PrefixEntryPoint::Block,
         "meta" => parser::PrefixEntryPoint::MetaItem,
         "item" => parser::PrefixEntryPoint::Item,
-        "expr" => {
-            return input
-                .expect_fragment(parser::PrefixEntryPoint::Expr)
-                .map(|tt| tt.map(Fragment::Expr))
-        }
+        "vis" => parser::PrefixEntryPoint::Vis,
+        "expr" => return input.expect_fragment(parser::PrefixEntryPoint::Expr).map(Fragment::Expr),
         _ => {
-            let tt_result = match kind {
+            let res = match kind {
                 "ident" => input
                     .expect_ident()
-                    .map(|ident| Some(tt::Leaf::from(ident.clone()).into()))
+                    .map(|ident| tt::Leaf::from(ident.clone()).into())
                     .map_err(|()| err!("expected ident")),
-                "tt" => input.expect_tt().map(Some).map_err(|()| err!()),
-                "lifetime" => {
-                    input.expect_lifetime().map(Some).map_err(|()| err!("expected lifetime"))
-                }
+                "tt" => input.expect_tt().map_err(|()| err!()),
+                "lifetime" => input.expect_lifetime().map_err(|()| err!("expected lifetime")),
                 "literal" => {
                     let neg = input.eat_char('-');
                     input
@@ -721,23 +688,27 @@ fn match_meta_var(kind: &str, input: &mut TtIter) -> ExpandResult<Option<Fragmen
                         .map(|literal| {
                             let lit = literal.clone();
                             match neg {
-                                None => Some(lit.into()),
-                                Some(neg) => Some(tt::TokenTree::Subtree(tt::Subtree {
+                                None => lit.into(),
+                                Some(neg) => tt::TokenTree::Subtree(tt::Subtree {
                                     delimiter: None,
                                     token_trees: vec![neg, lit.into()],
-                                })),
+                                }),
                             }
                         })
                         .map_err(|()| err!())
                 }
-                // `vis` is optional
-                "vis" => Ok(input.expect_fragment(parser::PrefixEntryPoint::Vis).value),
                 _ => Err(ExpandError::UnexpectedToken),
             };
-            return tt_result.map(|it| it.map(Fragment::Tokens)).into();
+            return match res {
+                Ok(tt) => ExpandResult { value: Fragment::Tokens(tt), err: None },
+                Err(err) => ExpandResult {
+                    value: Fragment::Tokens(tt::TokenTree::Subtree(tt::Subtree::default())),
+                    err: Some(err),
+                },
+            };
         }
     };
-    input.expect_fragment(fragment).map(|it| it.map(Fragment::Tokens))
+    input.expect_fragment(fragment).map(Fragment::Tokens)
 }
 
 fn collect_vars(buf: &mut Vec<SmolStr>, pattern: &MetaTemplate) {

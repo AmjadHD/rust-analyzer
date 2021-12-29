@@ -92,7 +92,7 @@ impl<'a> TtIter<'a> {
     pub(crate) fn expect_fragment(
         &mut self,
         entry_point: parser::PrefixEntryPoint,
-    ) -> ExpandResult<Option<tt::TokenTree>> {
+    ) -> ExpandResult<tt::TokenTree> {
         let buffer = TokenBuffer::from_tokens(self.inner.as_slice());
         let parser_input = to_parser_input(&buffer);
         let tree_traversal = entry_point.parse(&parser_input);
@@ -114,7 +114,7 @@ impl<'a> TtIter<'a> {
             }
         }
 
-        let mut err = if !cursor.is_root() || error {
+        let err = if !cursor.is_root() || error {
             Some(err!("expected {:?}", entry_point))
         } else {
             None
@@ -132,16 +132,12 @@ impl<'a> TtIter<'a> {
             }
         }
         self.inner = self.inner.as_slice()[res.len()..].iter();
-        if res.is_empty() && err.is_none() {
-            err = Some(err!("no tokens consumed"));
-        }
         let res = match res.len() {
-            1 => Some(res[0].cloned()),
-            0 => None,
-            _ => Some(tt::TokenTree::Subtree(tt::Subtree {
+            1 => res[0].cloned(),
+            _ => tt::TokenTree::Subtree(tt::Subtree {
                 delimiter: None,
                 token_trees: res.into_iter().map(|it| it.cloned()).collect(),
-            })),
+            }),
         };
         ExpandResult { value: res, err }
     }
