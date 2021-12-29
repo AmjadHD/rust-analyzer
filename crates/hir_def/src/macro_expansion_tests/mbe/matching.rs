@@ -81,7 +81,6 @@ fn main() {
 
 #[test]
 fn stmt_boundaries() {
-    // FIXME: this actually works OK under rustc.
     check(
         r#"
 macro_rules! m {
@@ -100,6 +99,20 @@ stringify!(;
 |loop {}
 |;
 |);
+"#]],
+    );
+}
+
+#[test]
+fn empty_vis() {
+    check(
+        r#"
+macro_rules! m { ($($v:vis)?) => () }
+m!();
+"#,
+        expect![[r#"
+macro_rules! m { ($($v:vis)?) => () }
+/* error: invalid macro definition: empty token tree in repetition */
 "#]],
     );
 }

@@ -346,9 +346,3 @@ impl<T> ExpandResult<T> {
         self.err.map_or(Ok(self.value), Err)
     }
 }
-
-impl<T: Default> From<Result<T, ExpandError>> for ExpandResult<T> {
-    fn from(result: Result<T, ExpandError>) -> Self {
-        result.map_or_else(Self::only_err, Self::ok)
-    }
-}
