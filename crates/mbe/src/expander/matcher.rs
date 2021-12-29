@@ -699,13 +699,14 @@ fn match_meta_var(kind: &str, input: &mut TtIter) -> ExpandResult<Option<Fragmen
         "block" => parser::PrefixEntryPoint::Block,
         "meta" => parser::PrefixEntryPoint::MetaItem,
         "item" => parser::PrefixEntryPoint::Item,
+        "vis" => parser::PrefixEntryPoint::Vis,
         "expr" => {
             return input
                 .expect_fragment(parser::PrefixEntryPoint::Expr)
                 .map(|tt| tt.map(Fragment::Expr))
         }
         _ => {
-            let tt_result = match kind {
+            return match kind {
                 "ident" => input
                     .expect_ident()
                     .map(|ident| Some(tt::Leaf::from(ident.clone()).into()))
@@ -730,11 +731,10 @@ fn match_meta_var(kind: &str, input: &mut TtIter) -> ExpandResult<Option<Fragmen
                         })
                         .map_err(|()| err!())
                 }
-                // `vis` is optional
-                "vis" => Ok(input.expect_fragment(parser::PrefixEntryPoint::Vis).value),
                 _ => Err(ExpandError::UnexpectedToken),
-            };
-            return tt_result.map(|it| it.map(Fragment::Tokens)).into();
+            }
+            .map(|it| it.map(Fragment::Tokens))
+            .into()
         }
     };
     input.expect_fragment(fragment).map(|it| it.map(Fragment::Tokens))
